@@ -1,0 +1,12 @@
+{
+  "document": {
+    "type": "PLAIN_TEXT",
+    "content": "Enjoy your vacation!"
+  },
+  "features": {
+    "extractSyntax": true,
+    "extractEntities": true,
+    "extractDocumentSentiment": true
+  },
+  "encodingType": "UTF8"
+}

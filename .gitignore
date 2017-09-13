@@ -31,3 +31,9 @@ vignettes/*.pdf
 # Temporary files created by R markdown
 *.utf8.md
 *.knit.md
+
+# .DS_Store
+.DS_Store
+
+# Scripts I don't want to commit
+apis_and_webscraping/.load_creds.R
