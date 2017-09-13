@@ -7,6 +7,9 @@
 #                                                                             #
 # =========================================================================== #
 
+# Check robots.txt
+browseURL('https://www.twitter.com/robots.txt')
+
 # Libraries
 library(RSelenium)
 library(rvest)

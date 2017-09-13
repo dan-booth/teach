@@ -14,6 +14,9 @@ library(tidyverse)
 
 # == Preparation for scraping =================================================
 
+# Check robots.txt
+browseURL('https://www.realestate.com.au/robots.txt')
+
 # Use your web browser to establsh the URL structure
 # For 2 bed apartments in St Leonards the URL is
 search_url <- 'https://www.realestate.com.au/rent/property-unit+apartment-with-2-bedrooms-in-st+leonards%2c+nsw+2065/list-1?maxBeds=2&source=location-search'
