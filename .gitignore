@@ -37,3 +37,4 @@ vignettes/*.pdf
 
 # Scripts I don't want to commit
 apis_and_webscraping/.load_creds.R
+.Rproj.user

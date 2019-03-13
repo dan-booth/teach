@@ -1,0 +1,679 @@
+---
+title: "Attribution fit - Detailed overview"
+author: "Daniel Booth"
+date: "2019-01-14"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Attribution fit}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, echo = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Overview
+
+This vignette will go into detail about how the attribution algorithm works, and
+the differences between the `path_transform_method`s.
+
+For a general introduction to the package please, if you haven't already, see
+the **Fractribution Model - Quick start** vignette included in the package. To
+launch run:
+
+```{r, eval=FALSE}
+vignette('fractribution_model_quick_start')
+```
+
+## The fractribution algorithm
+
+### Motivation
+
+Fractribution uses a simplified counterfactual shapley value algorithm to assign
+fractions to each touchpoint in a path to conversion. The idea is that if you
+have a path to conversion that is **B > C > A** you want to be able to use a
+data-driven approach to appropriately assign a **fractional credit** to each
+touchpoint in the path. This might be say:
+
+* **A**: 35.8%
+* **B**: 43.4%
+* **C**: 20.8%
+
+These fractional values—at the **path-level**—are particularly useful if you
+additionally know the revenue value of the conversion(s) that this path resulted
+in. For example, if one converting customer on this path had created **$100** in
+revenue we'd want to distribute that revenue across the fractional values to
+yield an **attributed revenue** figure. Here it would be:
+
+* **A**: $35.80
+* **B**: $43.40
+* **C**: $20.80
+
+where \$35.80 + \$43.40 + \$20.80 = $100.00.
+
+Ultimately, we sum up these attributed revenue fractions across every
+customer to get a **channel-level attribution** report. This is what the
+`channel_revenue_attribution_report()` function does.
+
+### A worked example
+
+_**NOTE**: Everything shown in this vignette happens under the hood of the
+`attribution_fit()` function. You should NEVER have to do this manually. We are
+exploring the internals here just for demonstration purposes._
+
+Let's explore this in more detail. First load the package. We will also load
+`dplyr` to use in some of the examples:
+
+```{r, message=FALSE}
+library(fractribution.model)
+library(dplyr)
+```
+
+
+#### Prepare paths and conversion probabilities
+
+Now we will unravel the `attribution_fit()` function. Using the **path_summary**
+input provided, we first transform paths as per the **path_transform_method**
+(this is explained further in the
+[path transform methods](#path_transform_methods) section below). Next we
+calculate conversion probabilities for each path.
+
+For the **exposure** path transform, this yields the following:
+
+```{r}
+# Transform paths and calculate conversion probs
+path_summary <- fractribution.model:::exposure_path_summary_transform(example_path_summary)
+
+# Filter down our example
+demo_path_summary <- path_summary %>%
+  filter(path %in% c('B > C > A',
+                     'B > A',
+                     'B > C',
+                     'C > A',
+                     'A',
+                     'B',
+                     'C'))
+
+# Inspect
+demo_path_summary
+```
+
+See that for path **B > C > A** the conversion probability is **0.0909**.
+
+#### Counterfactuals and fractions
+
+The fractribution algorithm works as follows:
+
+1. Start with a **baseline path** and its **conversion_probability**
+1. Calculate the baseline path's **leave-one-out counterfactuals**
+1. Calculate the attribution fraction for each event in the baseline path as the
+   **marginal contribution** that the event adds to the
+   **conversion_probability** over its respective counterfactual. That is:
+   `conversion_prob(path with event) - conversion_prob(path without event)`
+1. If required (and this is the default), **normalize** the attribution
+   fractions
+1. Repeat steps 1. through 4. for all paths
+
+Now let's do this with real data. Here our baseline path will be **B > C > A**.
+
+***
+
+**Step 1**: First let's define the **baseline_path** and its
+**baseline_conversion_probability**:
+
+```{r}
+baseline_path <- 'B > C > A'
+baseline_conversion_prob <- demo_path_summary %>%
+  filter(path == baseline_path) %>%
+  pull(conversion_prob)
+
+# Inspect
+baseline_conversion_prob
+```
+
+***
+
+**Step 2**: Now we want to calculate each **leave-one-out counterfactual** and
+its respective **conversion_probability**:
+
+```{r}
+# The path length, is the number of counterfactuals
+drop_indicies <- fractribution.model:::path_length(baseline_path)
+
+# Counterfactuals (drop an event at each index)
+counterfactuals <- purrr::map_chr(
+  1:drop_indicies,
+  ~ fractribution.model:::drop_event(baseline_path, .))
+
+# Get conversion probability
+counterfactuals <- demo_path_summary %>%
+      filter(path %in% counterfactuals)
+
+# For demonstration purposes, manually add in the dropped event
+counterfactuals <- counterfactuals %>% 
+  mutate(dropped_event = c('A', 'C', 'B')) %>% 
+  select(dropped_event, counterfactual = path, conversion_prob)
+
+# Inspect
+counterfactuals
+```
+
+See that for path **B > C > A** the counterfactuals are **B > C**, **B > A**,
+and **C > A**.
+
+***
+
+**Step 3**: Calculate the marginal contribution of each event in the
+**baseline_path**:
+
+To determine the fractional value for event **A** in the baseline path, we will
+take the **baseline_conversion_prob** and subtract the **conversion_prob** for
+its leave-one-out counterfactual, which here is **0.0317**. We replicate the
+same for events **B** and **C**. To run all we can do:
+
+```{r}
+attribution_fractions <- counterfactuals %>% 
+  mutate(marginal_contribution = baseline_conversion_prob - conversion_prob) %>% 
+  select(event = dropped_event, attribution_fraction = marginal_contribution)
+
+# Inspect
+attribution_fractions
+```
+
+So here **A**'s attribution_fraction of **0.0592** is **0.0909 - 0.0317**, etc.
+
+***
+
+**Step 4**: Normalize the **attribution_fraction**s:
+
+Finally we want to make the **attribution_fraction**s sum to 1 so we are able to
+interpret them as percentages of a conversion. This makes it simple to
+distribute revenue across each event.
+
+To do this we normalize, that is divide by the sum:
+
+```{r}
+attribution_fractions <- attribution_fractions %>% 
+  mutate(normalized_attribution_fraction = 
+           attribution_fraction / sum(attribution_fraction)) %>% 
+  select(event, normalized_attribution_fraction)
+
+# Inspect
+attribution_fractions
+```
+
+Which yields a fractional attribution of 35.8% for A, 43.4% for B, and 20.8% for
+C.
+
+#### Another example, more succinct
+
+The actual implementation isn't as drawn out as what is shown above. There is a
+`fractional_values()` function that handles the counterfactuals and
+the marginal contributions for us. Let's leverage it this time for simplicity.
+
+Again start with a **baseline_path**, this time **B > C**, and its
+**baseline_conversion_probability**:
+
+```{r}
+baseline_path <- 'B > C'
+baseline_conversion_prob <- demo_path_summary %>%
+  filter(path == baseline_path) %>%
+  pull(conversion_prob)
+```
+
+Calculate the marginal contributions (here we are NOT yet normalizing):
+
+```{r}
+fractribution.model:::fractional_values(
+  baseline_path,
+  baseline_conversion_prob,
+  all_paths = demo_path_summary,
+  normalize = FALSE,
+  path_transform_method = 'exposure')
+```
+
+We actually can normalize directly in the previous step:
+
+```{r}
+fractribution.model:::fractional_values(
+  baseline_path,
+  baseline_conversion_prob,
+  all_paths = demo_path_summary,
+  normalize = TRUE,
+  path_transform_method = 'exposure')
+```
+
+Which yields a fractional attribution of 58.5% for B and 41.5% for C.
+
+#### Map across all paths
+
+The implementation in the package maps across all paths like so:
+
+```{r}
+fracs <-
+  purrr::map2_df(demo_path_summary$path,
+                 demo_path_summary$conversion_prob,
+                 ~ fractribution.model:::fractional_values(
+                   .x, .y,
+                   all_paths = demo_path_summary,
+                   path_transform_method = 'exposure'))
+
+# We also clean up the channel names so they make good column names
+# Replace all NAs with 0, and rename columns without spaces or dashes
+fracs <- fracs %>%
+  mutate_all(funs(replace(., is.na(.), 0))) %>%
+  rename_all(funs(paste0(stringr::str_to_lower(.) %>%
+                         stringr::str_replace_all(' - ', ' ') %>%
+                         stringr::str_replace_all('-', ' ') %>%
+                         stringr::str_replace_all(' ', '_'))))
+
+# Inspect
+fracs
+```
+
+You can see the results of the two examples before in here.
+
+### Special cases
+
+There are a few special cases that arise. These are listed and shown with
+examples below.
+
+#### The counterfactual doesn't exist
+
+For baseline path **B > D > G**, the counterfactual for **B**, **D > G**,
+doesn't exist. This is approached as meaning that the **conversion_probability**
+for the path **D > G** is just equal to **0** and so the attribution fraction
+for **B** is just the **baseline_conversion_prob**.
+
+Concretely, here is that **baseline_conversion_prob** for path **B > D > G** :
+
+```{r}
+baseline_path <- 'B > D > G'
+baseline_conversion_prob <- path_summary %>%
+  filter(path == baseline_path) %>%
+  pull(conversion_prob)
+
+# Inspect
+baseline_conversion_prob
+```
+
+Now look at the non-normalized attribution fractions:
+
+```{r}
+fractribution.model:::fractional_values(
+  baseline_path,
+  baseline_conversion_prob,
+  all_paths = path_summary,
+  normalize = FALSE,
+  path_transform_method = 'exposure')
+```
+
+See that **B** gets **0.5** (which is the **baseline_conversion_prob**).
+
+#### A marginal contribution is negative
+
+There will be cases where a counterfactual conversion probability will actually
+be _greater than_ the **baseline_conversion_prob**. Hence the marginal
+contribution will actually be **negative**.
+
+In these cases, we do NOT assign a negative fraction to the event, as this can
+cause the other events in the path to have a fractional attribution
+_greater than_ 1. This is a problem because it can, in turn, cause the
+channel-level report to attribute more conversions to that channel than actually
+existed (that is, the total number of conversions for paths containing that
+event).
+
+To mitigate this issue, in these cases, we just floor negative marginal
+contributions to **0**.
+
+Concretely, here's a path with the issue:
+
+```{r}
+baseline_path <- 'C > A > C'
+baseline_conversion_prob <- path_summary %>%
+  filter(path == baseline_path) %>%
+  pull(conversion_prob)
+
+# Inspect
+baseline_conversion_prob
+```
+
+Get the counterfactuals:
+
+```{r}
+# The path length, is the number of counterfactuals
+drop_indicies <- fractribution.model:::path_length(baseline_path)
+
+# Counterfactuals (drop an event at each index)
+counterfactuals <- purrr::map_chr(
+  1:drop_indicies,
+  ~ fractribution.model:::drop_event(baseline_path, .))
+
+# Get conversion probability
+counterfactuals <- path_summary %>%
+  filter(path %in% counterfactuals) %>% 
+  select(path, conversion_prob)
+
+# Inspect
+counterfactuals
+```
+
+See that `conversion_prob('A > C') > baseline_conversion_prob` and 
+`conversion_prob('C > A') > baseline_conversion_prob` so the marginal
+contribution of both **C**s in the path **C > A > C** is negative. Thus we set
+the attribution fraction for **C** to **0**.
+
+As explained, the non-normalized fractions are such:
+
+```{r}
+fractribution.model:::fractional_values(
+  baseline_path,
+  baseline_conversion_prob,
+  all_paths = path_summary,
+  normalize = FALSE,
+  path_transform_method = 'exposure')
+```
+
+When this is normalized, **A** in fact gets 100% of the credit:
+
+```{r}
+fractribution.model:::fractional_values(
+  baseline_path,
+  baseline_conversion_prob,
+  all_paths = path_summary,
+  normalize = TRUE,
+  path_transform_method = 'exposure')
+```
+
+#### All marginal contributions are negative
+
+Extending from above, there can be cases where ALL the marginal contributions
+for the **baseline_path** will be negative, and so all events are given **0**
+fractional attribution.
+
+To mitigate this issue, in these cases, we just give the last touch in the path
+the full contribution (last-touch attribution).
+
+This issue is most likely to occur when `path_transform_method = 'unique'` so
+let's set this up:
+
+```{r}
+# Transform paths and calculate conversion probs
+path_summary <- fractribution.model:::unique_path_summary_transform(example_path_summary)
+```
+
+For example the path **D > D > D** has **baseline_conversion_prob** equal to
+**0.03592814**:
+
+```{r}
+baseline_path <- 'D > D > D'
+baseline_conversion_prob <- path_summary %>%
+  filter(path == baseline_path) %>%
+  pull(conversion_prob)
+
+# Inspect
+baseline_conversion_prob
+```
+
+Which is less than all the counterfactuals (note here both counterfactuals are
+**D > D**):
+
+```{r}
+# The path length, is the number of counterfactuals
+drop_indicies <- fractribution.model:::path_length(baseline_path)
+
+# Counterfactuals (drop an event at each index)
+counterfactuals <- purrr::map_chr(
+  1:drop_indicies,
+  ~ fractribution.model:::drop_event(baseline_path, .))
+
+# Get conversion probability
+counterfactuals <- path_summary %>%
+  filter(path %in% counterfactuals) %>% 
+  select(path, conversion_prob)
+
+# Inspect
+counterfactuals
+```
+
+So the attribution goes all to the last-event, here **D**:
+
+```{r}
+fractribution.model:::fractional_values(
+  baseline_path,
+  baseline_conversion_prob,
+  all_paths = path_summary,
+  normalize = TRUE,
+  path_transform_method = 'exposure')
+```
+
+## <a name="path_transform_methods"></a>Path transform methods
+
+The `attribution_fit()` function employs a **path_transform_method** argument to
+instruct how to transform paths before conducting the counterfactual search
+during the attribution fit (as shown above).
+
+This is helpful because raw paths to conversion can be messy, especially if your
+lookback period is long or you have many different channels defined.
+
+We have five path transforms available:  
+
+*  **unique**: treat all events in a path as unique.
+*  **exposure**: collapse repeat events that are immediately in sequence.
+*  **first**: take only the first occurance of any given event.
+*  **recency**: look at where the event occured in the timeline before
+   conversion and: treat the same events differently if they occur in different
+   time buckets; whereas collapse events if they are within the same bucket. The
+   buckets are (in days), `{1, 2, 3-4, 5-7, 8-14, 15-30}`.
+*  **frequency**: count events from their first occurance.
+
+Depending on your marketing strategy you might favour one or the other.
+Additionally, you can run all methods and average the fractions across some
+weightings you specify, it's up to you.
+
+### Same path, different transforms
+
+To give a concrete example, let's consider the following path
+**A > A > B > C > B**. Let's put it in a dataframe that we can work with (note
+the difference in recency notation):
+
+```{r}
+# Create a tbl to display results nicely
+transforms <- tibble(path_transform = c("unique", "exposure", "first",
+                                        "recency", "frequency"),
+                     initial_path = c(rep('A > A > B > C > B', 3),
+                                      'A(15-30) > A(5-7) > B(1) > C(1) > B(1)',
+                                      'A > A > B > C > B'))
+
+# Inspect
+transforms
+```
+
+Now each transform yields as follows:
+
+```{r}
+# Define a quick transform routing function
+transform_path <- function(path, path_transform_method) {
+  transformed_path <- switch(path_transform_method,
+    unique = path,
+    exposure = fractribution.model:::collapse_sequential_repeats(path),
+    first = fractribution.model:::collapse_all_repeats(path),
+    recency = fractribution.model:::collapse_all_repeats(path),
+    frequency = fractribution.model:::collapse_by_count(path)
+  )
+
+  return(transformed_path)
+}
+
+# Add to our tbl
+transforms <- transforms %>% 
+  mutate(transformed_path = purrr::map2_chr(initial_path, path_transform,
+                                            ~ transform_path(.x, .y)))
+# Inspect
+transforms 
+```
+
+Make note of the slight differences in the **path_transform_method**s.
+
+The recency row is cut off above, so here it is in its entirety:
+
+```{r}
+transforms %>% filter(path_transform == 'recency') %>% glimpse()
+```
+
+### Different transforms, same result
+
+There are many cases where you will get the **same resulting path** despite
+using **different transforms**. This occurs across the **unique**, **exposure**,
+and **first** methods.
+
+Here are some examples—
+
+Exposure and first the same:
+
+```{r}
+path <- 'A > A > B > C'
+
+# Exposure method
+fractribution.model:::collapse_sequential_repeats(path)
+
+# First method
+fractribution.model:::collapse_all_repeats(path)
+```
+
+Unique, exposure, and first the same:
+
+```{r}
+path <- 'A > B > C'
+
+# Unique method
+path
+
+# Exposure method
+fractribution.model:::collapse_sequential_repeats(path)
+
+# First method
+fractribution.model:::collapse_all_repeats(path)
+```
+
+### Different input, same transform, same result
+
+There are also many cases where, using a **single path transform** method, you
+will get the **same resulting path** despite having different input paths. This
+occurs across the **exposure**, **first**, **recency**, and **frequency**
+methods.
+
+Here are some examples—
+
+Frequency and first method:
+
+```{r}
+# Inputs
+input_1 <- 'A > B > A'
+input_2 <- 'A > A > B'
+
+# Same via frequency method
+fractribution.model:::collapse_by_count(input_1)
+
+fractribution.model:::collapse_by_count(input_2)
+
+# Same via first method
+fractribution.model:::collapse_all_repeats(input_1)
+
+fractribution.model:::collapse_all_repeats(input_2)
+```
+
+Exposure method:
+
+```{r}
+# Inputs
+input_1 <- 'A > B > C'
+input_2 <- 'A > A > B > C > C'
+
+# Same via exposure method
+fractribution.model:::collapse_sequential_repeats(input_1)
+
+fractribution.model:::collapse_sequential_repeats(input_2)
+```
+
+Recency method:
+
+```{r}
+# Inputs
+input_1 <- 'A(15-30) > A(5-7) > B(1) > C(1) > B(1)'
+input_2 <- 'A(15-30) > A(15-30) > A(5-7) > B(1) > C(1) > B(1) > C(1)'
+
+# Same via recency method
+fractribution.model:::collapse_all_repeats(input_1)
+
+fractribution.model:::collapse_all_repeats(input_2)
+```
+
+### Comparing fractions across path transforms
+
+Your choice of **path_transform_method** will affect the final results. It's
+hard to anticipate the effects so we suggest trying all methods and comparing
+the results. Ultimately you should choose one (or a combination) that best suits
+your marketing strategy.
+
+To give you insight into the differences, here's an example where we map across
+all the **path_transform_method`**s (not recency here as data input structure is
+different).
+
+So we can fit all the output within the code blocks we filter to just consider
+paths starting with **B** or **A**; ending with **B** or **A**; and only
+containing **B** or **A**:
+
+```{r}
+ab_paths <- example_path_summary %>% 
+  filter(stringr::str_detect(path, '^(A > |B > )(A > |B > )*(A|B)$'))
+```
+
+Map and fit fractribution for all methods:
+
+```{r}
+path_transform_methods <- c("unique", "exposure", "first", "frequency")
+
+attribution_models <- purrr::map(
+  path_transform_methods,
+  ~ attribution_fit(ab_paths,
+                    path_transform_method = .x,
+                    path_level_only = TRUE))
+
+names(attribution_models) <- path_transform_methods
+```
+
+Now let's inspect the results.
+
+**Unique** will not reduce any paths, so let's just look at **A > B** and
+**B > A**:
+
+```{r}
+attribution_models$unique %>%
+  filter(path %in% c('A > B', 'B > A')) %>% 
+  select(path, a, b)
+```
+
+**Exposure** collapses down to just **9** paths:
+
+```{r}
+attribution_models$exposure %>%
+  select(path, a, b)
+```
+
+**First** collapses down further to just **4** paths:
+
+```{r}
+attribution_models$first %>%
+  select(path, a, b)
+```
+
+**Frequency** has many paths, so let's just consider forms of **B > A**:
+```{r}
+attribution_models$frequency %>%
+  filter(stringr::str_detect(path, '^B\\([0-9]*\\) > A\\(1\\)$')) %>% 
+  select(path, a, b)
+```
+
+Make note of the slight differences across all the methods.

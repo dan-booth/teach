@@ -1,0 +1,398 @@
+---
+title: "Fractribution Model - Quick start"
+author: "Daniel Booth"
+date: "2019-01-14"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Attribution fit}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Overview
+
+The Fractribution framework enables you to derive user-level fractional
+attribution values from your marketing and event touchpoints data. This package,
+**fractribution.model**, fits a customisable user-level fractional attribution
+model using a simplified Shapley Value method. Additionally, and for comparison
+purposes, a last-touch attribution function is also implemented in the package.
+
+In this vignette we will explore the core functions in the package so you are
+able to get started quickly.
+
+## Examples
+
+### Load package
+
+First load the package. We will also load `dplyr` to use in some of the
+examples:
+
+```{r, message=FALSE}
+library(fractribution.model)
+library(dplyr)
+```
+
+### Paths to conversion data
+
+The `attribution_fit()` function requires a `path_summary` input which needs to
+be created from your marketing data (such as Google Analytics sessions).
+Additionally, if you want to produce the attribution at the customer-level, you
+need to also include a `path_customer_map` input.
+
+You can produce this data either through your own data engineering, or through
+the **fractribution.data** package (see
+`?fractribution.data::run_attribution_report` for more details).
+
+For now, for your reference, we have included examples of these two input files
+in the package and we explain these below.
+
+#### Path summary
+
+The `path_summary` input is a dataframe with columns `path`,
+`total_conversions`, and `total_non_conversions`. The last two columns are the
+`path`'s aggregated conversion and non-conversion counts.
+
+For your reference there is an `example_path_summary` dataframe loaded with the
+package:
+
+```{r}
+example_path_summary
+```
+
+#### Path customer map
+
+The `path_customer_map` input is is a dataframe mapping from `path` to
+`customer_id`.
+
+Again there is a reference, `example_path_customer_map`, loaded with the
+package:
+
+```{r}
+example_path_customer_map
+```
+
+### Attribution fit
+
+The `attribution_fit()` function runs through the counterfactual shapley value
+algorithm to fit an attribution model for the paths and their conversion
+probabilities.
+
+As mentioned above, you can produce the attribution at the `customer_id` or
+`path` level. To control this use the `path_level_only` argument, which will
+default to `FALSE` (i.e. the customer-level report is produced).
+
+To run the attribution report, use the `attribution_fit()` function, for
+example:
+
+```{r}
+fractional_attribution <- attribution_fit(example_path_summary,
+                                          example_path_customer_map)
+                                          
+# Inspect some customers
+fractional_attribution %>% 
+  filter(customer_id %in% c('cid_1644', 'cid_1683', 'cid_1755'))
+```
+
+See that for the customer with **cid_1683**, who had the **B > A** path to
+conversion, fractribution has attributed **55.3%** of the conversion to
+**channel B** and **44.7%** to **channel A**.
+
+#### Path level only
+
+If you just want to fractional values at the path- (not customer-) level,
+set `path_level_only = TRUE`:
+
+```{r, warning=FALSE}
+path_fracs <- attribution_fit(example_path_summary,
+                              path_level_only = TRUE)
+
+# Inspect some paths
+path_fracs %>% 
+  filter(path %in% c('B', 'A', 'B > C', 'B > D', 'B > D > G', 'D > C > A')) %>% 
+  select(path:g)
+```
+
+Notice how the value of **D** in the path **B > D** (**59.5%**) reduces
+significantly when a **G** is added to the path (i.e. **B > D > G**). That is,
+**D**'s value drops to **26.2%**, whereas **B**'s value remains very stable
+(**40.5%** to **39.3%**).
+
+#### Path transform method
+
+Hidden in the two examples above was the default
+`path_transform_method = 'exposure'` argument. Raw paths to conversion can be
+messy, especially if your lookback period is long or you have many different
+channels defined. Thus it is effective to transform paths before conducting the
+counterfactual search during the attribution fit. We have five options for this:
+**unique**, **exposure**, **first**, **recency**, and **frequency**, each with
+various benefits specific to the use case. See `?attribution_fit` for details on
+each.
+
+To demonstrate how the `path_transform_method` will change the attribution fit,
+here's the same input data from above, but using the **first** path transform
+instead (which could be more appropriate for a brand awareness type marketing
+strategy):
+
+```{r}
+# 'first' path transform
+first_fit <- attribution_fit(example_path_summary,
+                             example_path_customer_map,
+                             path_transform_method = 'first')
+                                          
+# Inspect some customers
+first_fit %>% 
+  filter(customer_id %in% c('cid_1644', 'cid_1683', 'cid_1755'))
+```
+
+Notice how the attribution fractions have changed slightly. This change could be
+more dramatic in your own data.
+
+### Reporting
+
+Now that we can get the attribution fractions at the customer-level, we
+will typically want to join in revenue information and roll up to a higher-level
+channel report.
+
+Fractribution supports this with the `channel_attribution_report()` and
+`channel_revenue_attribution_report()` functions, as well as a
+`last_touch_attribution()` function for comparison purposes. We'll explore these
+below.
+
+#### Channel Attribution
+
+`channel_attribution_report()` will take the path-level attribution fractions
+fit in `attribution_fit()` and roll up to a channel level report. For example if
+we use our `fractional_attribution` fit from before, we get the following:
+
+```{r}
+fractribution <- channel_attribution_report(fractional_attribution)
+
+# Inspect
+fractribution
+```
+
+So here we can say channel **b** was attributed **683** conversions, etc.
+
+It's also a good sanity check to confirm that the fractribution
+`attribution_conversions` and `path_summary$total_conversions` column sums are
+equal:
+
+```{r}
+# Attributed conversions
+sum(fractribution$attributed_conversions)
+
+# Original paths to conversion
+sum(example_path_summary$total_conversions)
+```
+
+
+#### Combining Last touch attribution
+
+For comparison we include a `last_touch_attribution()` function. We can
+aggregate last-touch attribution with the following: 
+
+```{r}
+last_touch <- last_touch_attribution(example_path_summary)
+
+# Inspect
+last_touch
+```
+
+Note this also includes the same `path_transform_method` argument which you can
+tweak depending on your use case. It defaults to **unique** by which we get the
+actual last touch.
+
+We can join this to the fractribution channel fractions using the following
+(note there is a little processing needed on channel first):
+
+```{r}
+# Clean up last-touch channel name
+library(stringr)
+last_touch <- last_touch %>% 
+    mutate(last_channel = str_to_lower(last_channel) %>%
+      str_replace_all(' - ', ' ') %>%
+      str_replace_all('-', ' ') %>%
+      str_replace_all(' ', '_'))
+
+# Join to fractribution
+channel_report <- fractribution %>% 
+  inner_join(last_touch, by = c('channel' = 'last_channel')) %>% 
+  mutate(difference = attributed_conversions - last_touch_conversions)
+
+# Inspect
+channel_report
+```
+
+You can now see which channels are shown to improve in value in fractribution
+over last-touch attribution. For example **28** additional conversions were
+granted to **b** (last-touch undervaluing). Also **17** conversions were removed
+from **c** (last-touch overvaluing), etc.
+
+#### Adding a default conversion value
+
+Next, you might have some default conversion value you can assign to
+estimate an attributed revenue:
+
+```{r}
+# Set default conversion value
+conversion_val <- 70
+
+# Distribute 
+channel_report_default_rev <- channel_report %>% 
+  mutate(attributed_revenue = attributed_conversions * conversion_val,
+         last_touch_revenue = last_touch_conversions * conversion_val) %>% 
+  select(attributed_conversions, attributed_revenue,
+         last_touch_conversions, last_touch_revenue)
+  
+# Inspect
+channel_report_default_rev
+```
+
+**Note** we don't recommend this approach but _instead_ suggest using the actual
+revenue if possible (see the next section).
+
+#### Channel report with revenue and ROAS
+
+Attributing a default, single, conversion value to all customers is suboptimal
+if you know—from your own transaction systems—what the actual conversion was for
+each customer.
+
+If you do know this revenue, you can get the most leverage from fractribution's
+customer-level output.
+
+The `channel_revenue_attribution_report()` function will facilitate the process
+for you.
+
+It takes two additional inputs: `conversion_revenue` and (optionally)
+`channel_spend`. Including `channel_spend` means you will also get a **ROAS**
+calculation in the report.
+
+Like with `attribution_fit()` there are example datasets loaded with the
+package. We'll explore these below and then show the report function.
+
+##### Conversion revenue
+
+The `conversion_revenue` input is a dataframe with columns `customer_id` and
+`conversion_value`. The `customer_id`s are from `path_customer_map` and the
+`conversion_value`s are the currency value for each customer's conversion.
+
+For your reference there is an `example_conversion_revenue` dataframe loaded
+with the package:
+
+```{r}
+example_conversion_revenue
+```
+
+##### Channel spend
+
+The `channel_spend` input is a dataframe with columns `channel` and
+`total_spend` to use for ROAS calculations. Each channel that appears in a
+path should have a record, with the `total_spend` being the amount spent on the
+channel during the reporting period. If the channel is non-marketing (e.g.
+organic search) set the `total_spend` to `NA`.
+
+Again there is a reference, `example_channel_spend`, loaded with the
+package:
+
+```{r}
+example_channel_spend
+```
+
+##### Attributed Revenue and ROAS
+
+Finally we can calculate attributed revenue and ROAS. To do this use the
+`channel_revenue_attribution_report()` function:
+
+```{r}
+fractribution_and_roas <-
+  channel_revenue_attribution_report(fractional_attribution,
+                                     example_conversion_revenue,
+                                     example_channel_spend)
+
+# Inspect
+fractribution_and_roas
+```
+
+### Run all path transform methods for comparison
+
+If you want to run all path transform methods and compare them you can do
+something like the following code examples.
+
+#### Compare attribution fits
+
+Map through each `path_transform_method` and collect `attribution_fit()`s in a
+list:
+
+```{r, eval=FALSE}
+# Comparing the different methods
+path_transform_methods <- c("unique", "exposure", "first", "frequency")
+
+attribution_models <- purrr::map(
+  path_transform_methods,
+  ~ attribution_fit(example_path_summary,
+                    example_path_customer_map,
+                    .x))
+
+names(attribution_models) <- path_transform_methods
+
+# Inspect
+attribution_models
+```
+
+#### Comparing channel reports
+
+Continuing from above, pass the list of fits (`attribution_models`) into the
+`channel_attribution_report()` function, again collecting the results in a list:
+
+```{r, eval=FALSE}
+# See the final reports
+channel_reports <- purrr::map(attribution_models,
+                              channel_attribution_report)
+
+# Inspect
+channel_reports
+```
+
+#### Comparing last-touch attribution reports
+
+Similarly to above, we can also map through `last_touch_attribution()` for each
+`path_transform_method`:
+
+```{r, eval=FALSE}
+path_transform_methods <- c("unique", "exposure", "first", "frequency")
+
+last_touch_reports <- purrr::map(
+  path_transform_methods,
+  ~ last_touch_attribution(
+    example_path_summary,
+    .x))
+
+names(last_touch_reports) <- path_transform_methods
+
+# Inspect
+last_touch_reports
+```
+
+### Additional details
+
+If you would like to discover more about the actual fractribution algorithm,
+there is an **Attribution fit - Detailed overview** vignette included in the
+package which will go into more detail, as well as explore more on the
+differences between the `path_transform_method`s. To launch run:
+
+```{r, eval=FALSE}
+vignette('attribution_fit_details')
+```
+
+## Bugs and features
+
+**fractribution.model** is a work in progress and so you might find some issues.
+If you do, please let me know at [dbooth@google.com](mailto:dbooth@google.com)
+and I'll try fix it asap!
+
+Also if you find you need an additional feature please reach out to me and I can
+scope and, if I think it's suitable, add into a future release.

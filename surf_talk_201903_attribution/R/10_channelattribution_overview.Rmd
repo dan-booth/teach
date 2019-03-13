@@ -1,0 +1,182 @@
+---
+title: "ChannelAttribution package review"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r, echo = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Overview
+
+High-level exploration of the `ChannelAttribution` package.
+
+First let's load the package:
+```{r, message=FALSE}
+library(tidyverse)
+library(ChannelAttribution)
+```
+
+## Package data
+
+There is a pre-loaded dataset within the package (see
+`?ChannelAttribution::Data` for details)
+
+```{r}
+data(PathData)
+customer_paths <- as_tibble(Data)
+```
+
+Inspect the data:
+```{r}
+customer_paths %>% View()
+```
+
+Let's inspect one of these:
+
+```{r}
+customer_paths %>% filter(path == 'beta > beta > eta')
+```
+
+### Channel
+
+Let's extract the set of **channels**:
+```{r}
+customer_paths %>%
+  mutate(split_paths = stringr::str_split(path, " > ")) %>%
+  select(split_paths) %>%
+  unnest(split_paths) %>%
+  count(split_paths, sort = TRUE)
+```
+
+They are just using Greek letters as a toy dataset.
+
+## Fit the Markov Model
+
+There is a `markov_model()` function to do this. For the help page:
+
+```{r, eval=FALSE}
+?markov_model
+```
+
+
+### Order of Markov Model
+
+A Markov model determines the probability that a user will transition from
+Sequence A to Sequence B based on the steps that each user takes through a site.
+The contents of these sequences are determined by the Markov order, which ranges
+from 0 to 4. Here are some guidelines to **determine what Markov Order is appropriate**:
+
+* **Order 0**: Doesn’t know where the user came from or what step the user is on, only the probability of going to any page.
+* **Order 1**: Looks back zero steps. You are currently at Step A (Sequence A). The probability of going anywhere is based on being at that step.
+* **Order 2**: Looks back one step. You came from Step A (Sequence A) and are currently at Step B (Sequence B). The probability of going anywhere is based on where you were and where you are.
+* **Order 3**: Looks back two steps. You came from Step A > B (Sequence A) and are currently at Step C (Sequence B). The probability of going anywhere is based on where you were and where you are.
+* **Order 4**: Looks back three steps. You came from Step A > B > C (Sequence A) and are currently at Step D (Sequence B). The probability of going anywhere is based on where you were and where you are.
+
+According to the paper this package is based on (see help file) the greatest increase in accuracy is realized moving between second and third order, in contrast to the marginal lift moving between the third and fourth.
+
+So lets start with **order 3**.
+
+### Fit
+
+```{r}
+mod <- markov_model(customer_paths, var_path = 'path', 
+                    var_conv = 'total_conversions',
+                    var_value = 'total_conversion_value',
+                    var_null = 'total_null', out_more = TRUE,
+                    order = 3, sep = ">", seed = 101)
+```
+
+### Get the results
+
+Since we set `out_more = TRUE` this will return a list with the attribution results,
+the transition matrix generated and the removal effects.
+
+```{r}
+str(mod)
+```
+
+#### Channel attribution report
+
+```{r}
+mod$result %>% 
+  mutate(perc_contribution = round(total_conversions / sum(total_conversions), 2))
+```
+
+```{r}
+# Load example data from Fractribution
+path_summary <- fractribution.model::example_path_summary
+```
+
+Run channel attribution:
+
+```{r}
+mod_2 <- markov_model(path_summary, var_path = 'path', 
+                      var_conv = 'total_conversions',
+                      var_null = 'total_non_conversions',
+                      out_more = TRUE, order = 3, sep = ">",
+                      seed = 101)
+```
+
+Inspect:
+
+```{r}
+# Put in variable
+hmm <- mod_2$result %>% 
+  mutate(channel_name = as.character(channel_name),
+         total_conversions = round(total_conversions))
+
+# Inspect
+hmm
+```
+
+Compare to Fractribution:
+
+```{r}
+# Load library
+library(fractribution.model)
+
+# Fit
+fractional_attribution <- attribution_fit(example_path_summary,
+                                          example_path_customer_map)
+
+# Aggregate
+fractribution <- channel_attribution_report(fractional_attribution)
+
+# Inspect
+fractribution
+```
+
+And last touch:
+
+```{r}
+# Fit
+last_touch <- last_touch_attribution(example_path_summary)
+
+# Inspect
+last_touch
+```
+
+Join all together to compare:
+
+```{r}
+# Make fractribution upper case
+fractribution <- fractribution %>% 
+    mutate(channel = stringr::str_to_upper(channel))
+
+# Join all together
+combined_channel_report <- fractribution %>% 
+  inner_join(hmm, by = c('channel' = 'channel_name')) %>% 
+  inner_join(last_touch, by = c('channel' = 'last_channel')) %>% 
+  select(channel,
+         fractribution = attributed_conversions,
+         hmm = total_conversions,
+         last_touch = last_touch_conversions)
+
+# Inspect
+combined_channel_report
+```
+
+
