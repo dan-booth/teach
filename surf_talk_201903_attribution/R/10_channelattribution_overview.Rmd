@@ -1,5 +1,7 @@
 ---
 title: "ChannelAttribution package review"
+author: "Daniel Booth"
+date: "2019-03-12"
 output:
   pdf_document: default
   html_notebook: default
@@ -11,18 +13,21 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 ## Overview
 
-High-level exploration of the `ChannelAttribution` package.
+This vignette will present at a high-level exploration of the
+`ChannelAttribution` package. We will then compare ChannelAttribution to
+fractribution and last touch approaches.
 
-First let's load the package:
+First let's load the required package:
 ```{r, message=FALSE}
-library(tidyverse)
 library(ChannelAttribution)
+library(dplyr)
+library(tidyr)
 ```
 
 ## Package data
 
 There is a pre-loaded dataset within the package (see
-`?ChannelAttribution::Data` for details)
+`?ChannelAttribution::Data` for details).
 
 ```{r}
 data(PathData)
@@ -31,10 +36,11 @@ customer_paths <- as_tibble(Data)
 
 Inspect the data:
 ```{r}
-customer_paths %>% View()
+customer_paths %>% glimpse()
 ```
 
-Let's inspect one of these:
+Let's inspect one of these, see that different conversion values mean multiple
+rows for the same path:
 
 ```{r}
 customer_paths %>% filter(path == 'beta > beta > eta')
@@ -51,16 +57,15 @@ customer_paths %>%
   count(split_paths, sort = TRUE)
 ```
 
-They are just using Greek letters as a toy dataset.
+Note this is a toy dataset.
 
-## Fit the Markov Model
+## Fit the Markov Model for attribution
 
 There is a `markov_model()` function to do this. For the help page:
 
 ```{r, eval=FALSE}
 ?markov_model
 ```
-
 
 ### Order of Markov Model
 
@@ -75,11 +80,15 @@ from 0 to 4. Here are some guidelines to **determine what Markov Order is approp
 * **Order 3**: Looks back two steps. You came from Step A > B (Sequence A) and are currently at Step C (Sequence B). The probability of going anywhere is based on where you were and where you are.
 * **Order 4**: Looks back three steps. You came from Step A > B > C (Sequence A) and are currently at Step D (Sequence B). The probability of going anywhere is based on where you were and where you are.
 
-According to the paper this package is based on (see help file) the greatest increase in accuracy is realized moving between second and third order, in contrast to the marginal lift moving between the third and fourth.
+According to the paper this package is based on (see help file) the greatest
+increase in accuracy is realized moving between second and third order, in
+contrast to the marginal lift moving between the third and fourth.
 
-So lets start with **order 3**.
+So let's go with **order 3**.
 
 ### Fit
+
+To fit we apply the function as follows:
 
 ```{r}
 mod <- markov_model(customer_paths, var_path = 'path', 
@@ -91,19 +100,28 @@ mod <- markov_model(customer_paths, var_path = 'path',
 
 ### Get the results
 
-Since we set `out_more = TRUE` this will return a list with the attribution results,
-the transition matrix generated and the removal effects.
+Since we set `out_more = TRUE` this will return a list with the attribution
+results, the transition matrix generated and the removal effects.
 
 ```{r}
+# Inspect
 str(mod)
 ```
 
 #### Channel attribution report
 
+We can extract a channel attribution report from the `mod` object.
+
 ```{r}
 mod$result %>% 
   mutate(perc_contribution = round(total_conversions / sum(total_conversions), 2))
 ```
+
+## Compare ChannelAttribution with Fractribution
+
+Let's compare the channel attribution model with fractribution and last touch.
+
+Run it all on the fractribution sample dataset:
 
 ```{r}
 # Load example data from Fractribution
@@ -124,15 +142,15 @@ Inspect:
 
 ```{r}
 # Put in variable
-hmm <- mod_2$result %>% 
+channel_attribution <- mod_2$result %>% 
   mutate(channel_name = as.character(channel_name),
          total_conversions = round(total_conversions))
 
 # Inspect
-hmm
+channel_attribution
 ```
 
-Compare to Fractribution:
+Run Fractribution:
 
 ```{r}
 # Load library
@@ -149,7 +167,7 @@ fractribution <- channel_attribution_report(fractional_attribution)
 fractribution
 ```
 
-And last touch:
+And run last touch:
 
 ```{r}
 # Fit
@@ -162,21 +180,21 @@ last_touch
 Join all together to compare:
 
 ```{r}
-# Make fractribution upper case
+# Make fractribution channels upper case
 fractribution <- fractribution %>% 
     mutate(channel = stringr::str_to_upper(channel))
 
 # Join all together
 combined_channel_report <- fractribution %>% 
-  inner_join(hmm, by = c('channel' = 'channel_name')) %>% 
+  inner_join(channel_attribution, by = c('channel' = 'channel_name')) %>% 
   inner_join(last_touch, by = c('channel' = 'last_channel')) %>% 
   select(channel,
          fractribution = attributed_conversions,
-         hmm = total_conversions,
+         channel_attribution = total_conversions,
          last_touch = last_touch_conversions)
 
 # Inspect
 combined_channel_report
 ```
 
-
+Little differences, same ranking. No harm running all and comparing.

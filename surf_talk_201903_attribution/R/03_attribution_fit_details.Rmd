@@ -2,11 +2,9 @@
 title: "Attribution fit - Detailed overview"
 author: "Daniel Booth"
 date: "2019-01-14"
-output: rmarkdown::html_vignette
-vignette: >
-  %\VignetteIndexEntry{Attribution fit}
-  %\VignetteEngine{knitr::rmarkdown}
-  %\VignetteEncoding{UTF-8}
+output:
+  pdf_document: default
+  html_notebook: default
 ---
 
 ```{r, echo = FALSE}

@@ -2,11 +2,9 @@
 title: "Fractribution for the Google Merchandise Store"
 author: "Daniel Booth"
 date: "2019-03-12"
-output: rmarkdown::html_vignette
-vignette: >
-  %\VignetteIndexEntry{Google Merchandise Store fractribution demo}
-  %\VignetteEngine{knitr::rmarkdown}
-  %\VignetteEncoding{UTF-8}
+output:
+  pdf_document: default
+  html_notebook: default
 ---
 
 ## Overview
@@ -156,11 +154,8 @@ at the prompt.
 Open up BigQuery to the project you ran this in, and check out the dataset:
 **contact_us_page_attribution_201707**.
 
-You should several tables have been created in there:  
-<br/>
-![](img/output_dataset.png)
+You should several tables have been created in there.
 
-<br />
 The `tables_to_keep` argument in the function above is what specified which
 tables remained here. You should click on each table and preview it to get a
 feel for the underlying data engineering steps that fractribution has done to
@@ -170,12 +165,8 @@ in the `fractribution.model` package.
 
 Also of particular note is the **fractribution_attribution** table (explicitly:
 `<your-project-id>.contact_us_page_attribution_201707.fractional_attribution`).
-This is the output from the attribution model. It should look something like
-(note this is filtered):  
-<br />
-![](img/final_output.png)
+This is the output from the attribution model.
 
-<br />
 For your own data, perhaps you will join this to some CRM/revenue information.
 
 Additionally, you can produce a channel attribution report directly here in
@@ -321,8 +312,7 @@ vignette('run_attribution_methods')
 ## Bugs and features
 
 **fractribution.data** is a work in progress and so you might find some issues.
-If you do, please let me know at [dbooth@google.com](mailto:dbooth@google.com)
-and I'll try fix it asap!
+If you do, please let me know at by raising an issue and I'll try fix it asap!
 
 Also if you find you need an additional feature please reach out to me and I can
 scope and, if I think it's suitable, add into a future release.

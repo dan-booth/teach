@@ -2,11 +2,9 @@
 title: "Fractribution Model - Quick start"
 author: "Daniel Booth"
 date: "2019-01-14"
-output: rmarkdown::html_vignette
-vignette: >
-  %\VignetteIndexEntry{Attribution fit}
-  %\VignetteEngine{knitr::rmarkdown}
-  %\VignetteEncoding{UTF-8}
+output:
+  pdf_document: default
+  html_notebook: default
 ---
 
 ```{r, echo=FALSE}
@@ -391,8 +389,7 @@ vignette('attribution_fit_details')
 ## Bugs and features
 
 **fractribution.model** is a work in progress and so you might find some issues.
-If you do, please let me know at [dbooth@google.com](mailto:dbooth@google.com)
-and I'll try fix it asap!
+If you do, please let me know at by raising an issue and I'll try fix it asap!
 
 Also if you find you need an additional feature please reach out to me and I can
 scope and, if I think it's suitable, add into a future release.
